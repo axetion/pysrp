@@ -14,6 +14,7 @@
   # v    Password verifier
 
 import hashlib
+import math
 import os
 import binascii
 import six
@@ -127,6 +128,7 @@ FC026E479558E4475677E9AA9E3050E2765694DFC81F56E880B96E71\
 '0x13')
 )
 
+
 def get_ng( ng_type, n_hex, g_hex ):
     if ng_type < NG_CUSTOM:
         n_hex, g_hex = _ng_const[ ng_type ]
@@ -153,6 +155,14 @@ def long_to_bytes(n):
     return six.b(''.join(l))
 
 
+def hex_to_long(s):
+    return int(s, 16)
+
+
+def long_to_hex(n):
+    return hex(n)[2:]
+
+
 def get_random( nbytes ):
     return bytes_to_long( os.urandom( nbytes ) )
 
@@ -160,17 +170,6 @@ def get_random( nbytes ):
 def get_random_of_length( nbytes ):
     offset = (nbytes*8) - 1
     return get_random( nbytes ) | (1 << offset)
-
-
-def old_H( hash_class, s1, s2 = '', s3=''):
-    if isinstance(s1, six.integer_types):
-        s1 = long_to_bytes(s1)
-    if s2 and isinstance(s2, six.integer_types):
-        s2 = long_to_bytes(s2)
-    if s3 and isinstance(s3, six.integer_types):
-        s3 = long_to_bytes(s3)
-    s = s1 + s2 + s3
-    return long(hash_class(s).hexdigest(), 16)
 
 
 def H( hash_class, *args, **kwargs ):
@@ -188,82 +187,37 @@ def H( hash_class, *args, **kwargs ):
     return int( h.hexdigest(), 16 )
 
 
-
-#N = 0xAC6BDB41324A9A9BF166DE5E1389582FAF72B6651987EE07FC3192943DB56050A37329CBB4A099ED8193E0757767A13DD52312AB4B03310DCD7F48A9DA04FD50E8083969EDB767B0CF6095179A163AB3661A05FBD5FAAAE82918A9962F0B93B855F97993EC975EEAA80D740ADBF4FF747359D041D5C33EA71D281E446B14773BCA97B43A23FB801676BD207A436C6481F1D2B9078717461A5B9D32E688F87748544523B524B0D57D5EA77A2775D2ECFA032CFBDBF52FB3786160279004E57AE6AF874E7303CE53299CCC041C7BC308D82A5698F3A8D0C38271AE35F8E9DBFBB694B5C803D89F7AE435DE236D525F54759B65E372FCD68EF20FA7111F9E4AFF73;
-#g = 2;
-#k = H(N,g)
-
-def HNxorg( hash_class, N, g ):
-    bin_N = long_to_bytes(N)
-    bin_g = long_to_bytes(g)
-
-    padding = len(bin_N) - len(bin_g) if _rfc5054_compat else 0
-
-    hN = hash_class( bin_N ).digest()
-    hg = hash_class( b''.join( [b'\0'*padding, bin_g] ) ).digest()
-
-    return six.b( ''.join( chr( six.indexbytes(hN, i) ^ six.indexbytes(hg, i) ) for i in range(0,len(hN)) ) )
-
-
-
 def gen_x( hash_class, salt, username, password ):
     username = username.encode() if hasattr(username, 'encode') else username
     password = password.encode() if hasattr(password, 'encode') else password
     return H( hash_class, salt, H( hash_class, username + six.b(':') + password ) )
 
 
-
-
-def create_salted_verification_key( username, password, hash_alg=SHA1, ng_type=NG_2048, n_hex=None, g_hex=None, salt_len=4 ):
-    if ng_type == NG_CUSTOM and (n_hex is None or g_hex is None):
-        raise ValueError("Both n_hex and g_hex are required when ng_type = NG_CUSTOM")
-    hash_class = _hash_map[ hash_alg ]
-    N,g = get_ng( ng_type, n_hex, g_hex )
-    _s = long_to_bytes( get_random( salt_len ) )
-    _v = long_to_bytes( pow(g,  gen_x( hash_class, _s, username, password ), N) )
-
-    return _s, _v
-
-
-
-def calculate_M( hash_class, N, g, I, s, A, B, K ):
-    I = I.encode() if hasattr(I, 'encode') else I
+def calculate_M(hash_class, A, B, S):
     h = hash_class()
-    h.update( HNxorg( hash_class, N, g ) )
-    h.update( hash_class(I).digest() )
-    h.update( long_to_bytes(s) )
-    h.update( long_to_bytes(A) )
-    h.update( long_to_bytes(B) )
-    h.update( K )
-    return h.digest()
 
-
-def calculate_H_AMK( hash_class, A, M, K ):
-    h = hash_class()
-    h.update( long_to_bytes(A) )
-    h.update( M )
-    h.update( K )
-    return h.digest()
-
-
+    h.update( A )
+    h.update( B )
+    h.update( S )
+    return h.hexdigest().lstrip("0")
 
 
 class Verifier (object):
-
-    def __init__(self, username, bytes_s, bytes_v, bytes_A, hash_alg=SHA1, ng_type=NG_2048, n_hex=None, g_hex=None, bytes_b=None):
+    def __init__(self, bytes_s, bytes_v, bytes_A, hash_alg=SHA1, ng_type=NG_2048, n_hex=None, g_hex=None, bytes_b=None):
         if ng_type == NG_CUSTOM and (n_hex is None or g_hex is None):
             raise ValueError("Both n_hex and g_hex are required when ng_type = NG_CUSTOM")
+
         if bytes_b and len(bytes_b) != 32:
             raise ValueError("32 bytes required for bytes_b")
+
         self.s = bytes_to_long(bytes_s)
         self.v = bytes_to_long(bytes_v)
-        self.I = username
-        self.K = None
         self._authenticated = False
 
         N,g        = get_ng( ng_type, n_hex, g_hex )
+        width = math.ceil(math.log2(N))
         hash_class = _hash_map[ hash_alg ]
-        k          = H( hash_class, N, g, width=len(long_to_bytes(N)) )
+        k          = H( hash_class, N, g, width=width )
 
         self.hash_class = hash_class
         self.N          = N
@@ -271,142 +225,45 @@ class Verifier (object):
         self.k          = k
 
         self.A = bytes_to_long(bytes_A)
+        self.AA = long_to_hex(self.A).encode("utf-8")
 
         # SRP-6a safety check
         self.safety_failed = self.A % N == 0
 
         if not self.safety_failed:
-
             if bytes_b:
                 self.b = bytes_to_long(bytes_b)
             else:
                 self.b = get_random_of_length( 32 )
+
             self.B = (k*self.v + pow(g, self.b, N)) % N
-            self.u = H(hash_class, self.A, self.B, width=len(long_to_bytes(N)))
-            self.S = pow(self.A*pow(self.v, self.u, N ), self.b, N)
-            self.K = hash_class( long_to_bytes(self.S) ).digest()
-            self.M = calculate_M( hash_class, N, g, self.I, self.s, self.A, self.B, self.K )
-            self.H_AMK = calculate_H_AMK( hash_class, self.A, self.M, self.K )
+            self.BB = long_to_hex(self.B).encode("utf-8")
+
+            self.u = H(hash_class, self.AA, self.BB, width=width)
+
+            self.S = long_to_hex(pow(self.A*pow(self.v, self.u, N), self.b, N)).encode("utf-8")
+            self.M = calculate_M(hash_class, self.AA, self.BB, self.S)
 
 
     def authenticated(self):
         return self._authenticated
-
-
-    def get_username(self):
-        return self.I
 
 
     def get_ephemeral_secret(self):
         return long_to_bytes(self.b)
 
 
-    def get_session_key(self):
-        return self.K if self._authenticated else None
-
     # returns (bytes_s, bytes_B) on success, (None,None) if SRP-6a safety check fails
     def get_challenge(self):
         if self.safety_failed:
             return None,None
         else:
-            return (long_to_bytes(self.s), long_to_bytes(self.B))
+            return (long_to_hex(self.s), long_to_hex(self.B))
 
-    # returns H_AMK on success, None on failure
+
     def verify_session(self, user_M):
         if not self.safety_failed and user_M == self.M:
             self._authenticated = True
-            return self.H_AMK
+            return True
 
-
-
-
-class User (object):
-    def __init__(self, username, password, hash_alg=SHA1, ng_type=NG_2048, n_hex=None, g_hex=None, bytes_a=None, bytes_A=None):
-        if ng_type == NG_CUSTOM and (n_hex is None or g_hex is None):
-            raise ValueError("Both n_hex and g_hex are required when ng_type = NG_CUSTOM")
-        if bytes_a and len(bytes_a) != 32:
-            raise ValueError("32 bytes required for bytes_a")
-        N,g        = get_ng( ng_type, n_hex, g_hex )
-        hash_class = _hash_map[ hash_alg ]
-        k          = H( hash_class, N, g, width=len(long_to_bytes(N)) )
-
-        self.I     = username
-        self.p     = password
-        if bytes_a:
-            self.a = bytes_to_long(bytes_a)
-        else:
-            self.a = get_random_of_length( 32 )
-        if bytes_A:
-            self.A = bytes_to_long(bytes_A)
-        else:
-            self.A = pow(g, self.a, N)
-        self.v     = None
-        self.M     = None
-        self.K     = None
-        self.H_AMK = None
-        self._authenticated = False
-
-        self.hash_class = hash_class
-        self.N          = N
-        self.g          = g
-        self.k          = k
-
-
-    def authenticated(self):
-        return self._authenticated
-
-
-    def get_username(self):
-        return self.I
-
-
-    def get_ephemeral_secret(self):
-        return long_to_bytes(self.a)
-
-
-    def get_session_key(self):
-        return self.K if self._authenticated else None
-
-
-    def start_authentication(self):
-        return (self.I, long_to_bytes(self.A))
-
-
-    # Returns M or None if SRP-6a safety check is violated
-    def process_challenge(self, bytes_s, bytes_B):
-
-        self.s = bytes_to_long( bytes_s )
-        self.B = bytes_to_long( bytes_B )
-
-        N = self.N
-        g = self.g
-        k = self.k
-
-        hash_class = self.hash_class
-
-        # SRP-6a safety check
-        if (self.B % N) == 0:
-            return None
-
-        self.u = H( hash_class, self.A, self.B, width=len(long_to_bytes(N)) )
-
-        # SRP-6a safety check
-        if self.u == 0:
-            return None
-
-        self.x = gen_x( hash_class, self.s, self.I, self.p )
-
-        self.v = pow(g, self.x, N)
-
-        self.S = pow((self.B - k*self.v), (self.a + self.u*self.x), N)
-
-        self.K     = hash_class( long_to_bytes(self.S) ).digest()
-        self.M     = calculate_M( hash_class, N, g, self.I, self.s, self.A, self.B, self.K )
-        self.H_AMK = calculate_H_AMK(hash_class, self.A, self.M, self.K)
-
-        return self.M
-
-
-    def verify_session(self, host_HAMK):
-        if self.H_AMK == host_HAMK:
-            self._authenticated = True
+        return False

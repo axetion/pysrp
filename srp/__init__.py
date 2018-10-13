@@ -11,9 +11,7 @@ if not _mod:
     import srp._pysrp
     _mod = srp._pysrp
 
-User                           = _mod.User
 Verifier                       = _mod.Verifier
-create_salted_verification_key = _mod.create_salted_verification_key
 
 SHA1      = _mod.SHA1
 SHA224    = _mod.SHA224
