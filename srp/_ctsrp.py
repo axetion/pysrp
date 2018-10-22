@@ -214,9 +214,9 @@ load_func( 'BN_bn2bin',  [ BIGNUM, ctypes.c_char_p ] )
 load_func( 'BN_bin2bn',  [ ctypes.c_char_p, ctypes.c_int, BIGNUM ], BIGNUM )
 
 load_func( 'BN_hex2bn',  [ ctypes.POINTER(BIGNUM), ctypes.c_char_p ] )
-load_func( 'BN_bn2hex',  [ BIGNUM ], ctypes.c_char_p )
+load_func( 'BN_bn2hex',  [ BIGNUM ], ctypes.c_void_p )
 
-load_func( 'CRYPTO_free', [ ctypes.c_char_p ] )
+load_func( 'CRYPTO_free', [ ctypes.c_void_p ] )
 
 load_func( 'RAND_seed', [ ctypes.c_char_p, ctypes.c_int ] )
 
@@ -243,28 +243,22 @@ def bytes_to_bn( dest_bn, bytes ):
     BN_bin2bn(bytes, len(bytes), dest_bn)
 
 
-def bn_to_hex(x):
-    digest = srp._ctsrp.BN_bn2hex(x)
-    result = digest.value
-
-    srp._ctsrp.CRYPTO_free(digest)
-
-    return result
+hex_to_bn = BN_hex2bn
 
 
 def bn_to_hex(x):
-    digest = srp._ctsrp.BN_bn2hex(x)
-    result = digest.value
+    pointer = BN_bn2hex(x)
+    result = ctypes.string_at(pointer)
 
-    srp._ctsrp.CRYPTO_free(digest)
+    CRYPTO_free(pointer)
 
-    return result
+    return result.lower()
 
 
 def H_str( hash_class, dest_bn, s ):
     d = hash_class(s).digest()
     buff = ctypes.create_string_buffer( s )
-    BN_bin2bn(d, len(d), dest)
+    BN_bin2bn(d, len(d), dest_bn)
 
 
 def H_bn( hash_class, dest, n ):
@@ -315,9 +309,9 @@ def update_hash( ctx, n ):
 
 def calculate_M( hash_class, A, B, S):
     h = hash_class()
-    update_hash( h, A )
-    update_hash( h, B )
-    update_hash( h, S )
+    h.update(A)
+    h.update(B)
+    h.update(S)
 
     return h.hexdigest().lstrip("0")
 
@@ -329,8 +323,8 @@ def get_ngk( hash_class, ng_type, n_hex, g_hex, ctx ):
     g = BN_new()
     k = BN_new()
 
-    BN_hex2bn( N, n_hex )
-    BN_hex2bn( g, g_hex )
+    hex_to_bn(N, n_hex)
+    hex_to_bn(g, g_hex)
     H_bn_bn(hash_class, k, N, g, width=BN_num_bytes(N))
     if _rfc5054_compat:
         BN_mod(k, k, N, ctx)
@@ -392,19 +386,22 @@ class Verifier (object):
             BN_mod(self.B, self.B, N, self.ctx)
 
             self.BB = bn_to_hex(self.B)
-            H_str(hash_class, self.u, self.AA + self.BB, width=BN_num_bytes(N))
+            H_str(hash_class, self.u, self.AA + self.BB)
 
             # S = (A *(v^u)) ^ b
             BN_mod_exp(self.tmp1, self.v, self.u, N, self.ctx)
             BN_mul(self.tmp2, self.A, self.tmp1, self.ctx)
             BN_mod_exp(self.S, self.tmp2, self.b, N, self.ctx)
 
-            self.M = calculate_M( hash_class, self.A, self.B, self.S )
+            self.SS = bn_to_hex(self.S)
+
+            self.M = calculate_M(hash_class, self.AA, self.BB, self.SS)
 
 
     def __del__(self):
         if not hasattr(self, 'A'):
             return # __init__ threw exception. no clean up required
+
         BN_free(self.A)
         BN_free(self.B)
         BN_free(self.S)
