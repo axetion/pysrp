@@ -430,7 +430,7 @@ class Verifier (object):
         if self.safety_failed:
             return None, None
         else:
-            return (bn_to_hex(self.s), bn_to_hex(self.B))
+            return (bn_to_hex(self.s).decode("utf-8"), bn_to_hex(self.B).decode("utf-8"))
 
 
     def verify_session(self, user_M):
